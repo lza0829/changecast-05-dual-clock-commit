@@ -4,38 +4,45 @@ from typing import Any
 
 import sqlite3
 
+BATCH_FIELDS = (
+    "batch_no",
+    "stream_id",
+    "status",
+    "source_events",
+    "applied_upsert",
+    "applied_delete",
+    "skipped_duplicate",
+    "skipped_stale",
+    "projected_alive",
+    "projected_deleted",
+    "max_seq",
+    "max_event_time",
+    "mode",
+    "decision",
+    "advance_mode",
+    "reason_code",
+    "reason_text",
+    "wave",
+    "wm_seq_before",
+    "wm_seq_after",
+    "wm_time_before",
+    "wm_time_after",
+    "projection_fingerprint",
+    "prev_fingerprint",
+    "note",
+    "created_at",
+)
 
-def insert_batch(
-    conn: sqlite3.Connection,
-    *,
-    batch_no: str,
-    stream_id: int,
-    status: str,
-    counts: dict[str, int],
-    note: str | None,
-    created_at: str,
-) -> int:
+
+def insert_batch(conn: sqlite3.Connection, *, fields: dict[str, Any]) -> int:
+    missing = [f for f in BATCH_FIELDS if f not in fields]
+    if missing:
+        raise ValueError(f"batch fields missing: {missing}")
+    cols = ", ".join(BATCH_FIELDS)
+    placeholders = ", ".join("?" for _ in BATCH_FIELDS)
     cur = conn.execute(
-        """
-        INSERT INTO project_batches(
-            batch_no, stream_id, status, source_events, applied_upsert, applied_delete,
-            skipped_duplicate, projected_alive, projected_deleted, max_seq, note, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            batch_no,
-            stream_id,
-            status,
-            counts["source_events"],
-            counts["applied_upsert"],
-            counts["applied_delete"],
-            counts["skipped_duplicate"],
-            counts["projected_alive"],
-            counts["projected_deleted"],
-            counts["max_seq"],
-            note,
-            created_at,
-        ),
+        f"INSERT INTO project_batches({cols}) VALUES ({placeholders})",
+        tuple(fields[f] for f in BATCH_FIELDS),
     )
     return int(cur.lastrowid)
 
@@ -48,8 +55,33 @@ def list_batches(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, An
     return [dict(r) for r in rows]
 
 
+def next_batch_no(conn: sqlite3.Connection, *, date_tag: str) -> str:
+    """Allocate a globally unique batch number from a monotonic counter.
+
+    A plain COUNT(*) would collide after a stream reset removes old batches,
+    so the suffix comes from a settings counter that never rewinds.
+    """
+    row = conn.execute("SELECT value FROM settings WHERE key='batch_seq'").fetchone()
+    counter = int(row["value"]) if row else 0
+    counter += 1
+    conn.execute(
+        "INSERT INTO settings(key, value) VALUES ('batch_seq', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (str(counter),),
+    )
+    return f"PB-{date_tag}-{counter:04d}"
+
+
 def get_batch(conn: sqlite3.Connection, batch_id: int) -> dict[str, Any] | None:
     r = conn.execute("SELECT * FROM project_batches WHERE id=?", (batch_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def latest_batch_for_stream(conn: sqlite3.Connection, stream_id: int) -> dict[str, Any] | None:
+    r = conn.execute(
+        "SELECT * FROM project_batches WHERE stream_id=? ORDER BY id DESC LIMIT 1",
+        (stream_id,),
+    ).fetchone()
     return dict(r) if r else None
 
 
@@ -64,8 +96,8 @@ def insert_applied_event(
     conn.execute(
         """
         INSERT INTO applied_events(
-            batch_id, stream_id, event_id, entity_key, op, seq, event_time, result, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?)
+            batch_id, stream_id, event_id, entity_key, op, seq, event_time, result, detail, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
         """,
         (
             batch_id,
@@ -76,6 +108,7 @@ def insert_applied_event(
             event["seq"],
             event["event_time"],
             event["result"],
+            event.get("detail") or "",
             created_at,
         ),
     )
@@ -99,3 +132,13 @@ def list_applied_events(
     sql += " ORDER BY id DESC LIMIT ?"
     params.append(limit)
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def batch_result_counts(conn: sqlite3.Connection, batch_id: int) -> dict[str, int]:
+    rows = conn.execute(
+        """
+        SELECT result, COUNT(*) c FROM applied_events WHERE batch_id=? GROUP BY result
+        """,
+        (batch_id,),
+    ).fetchall()
+    return {r["result"]: int(r["c"]) for r in rows}

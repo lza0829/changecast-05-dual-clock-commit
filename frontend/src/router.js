@@ -4,6 +4,7 @@ import Streams from './pages/Streams.vue'
 import Run from './pages/Run.vue'
 import Projections from './pages/Projections.vue'
 import Batches from './pages/Batches.vue'
+import Watermarks from './pages/Watermarks.vue'
 import Events from './pages/Events.vue'
 import Buffer from './pages/Buffer.vue'
 import Settings from './pages/Settings.vue'
@@ -14,6 +15,7 @@ export default createRouter({
     { path: '/', component: Dashboard },
     { path: '/streams', component: Streams },
     { path: '/run', component: Run },
+    { path: '/watermarks', component: Watermarks },
     { path: '/projections', component: Projections },
     { path: '/batches', component: Batches },
     { path: '/events', component: Events },

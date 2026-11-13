@@ -8,3 +8,8 @@ router = APIRouter(tags=["streams"])
 @router.get("/streams")
 def list_streams():
     return svc.list_streams()
+
+
+@router.get("/watermarks")
+def list_watermarks():
+    return svc.list_watermarks()

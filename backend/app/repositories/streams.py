@@ -12,6 +12,7 @@ def _row(r: sqlite3.Row | None) -> dict[str, Any] | None:
     d = dict(r)
     d["payload_fields"] = json.loads(d.pop("payload_fields_json"))
     d["enabled"] = bool(d["enabled"])
+    d["watermark_event_time"] = d.get("watermark_event_time") or ""
     return d
 
 
@@ -24,8 +25,15 @@ def get_stream(conn: sqlite3.Connection, stream_id: int) -> dict[str, Any] | Non
     return _row(conn.execute("SELECT * FROM project_streams WHERE id=?", (stream_id,)).fetchone())
 
 
-def set_watermark(conn: sqlite3.Connection, stream_id: int, watermark_seq: int) -> None:
+def set_watermarks(
+    conn: sqlite3.Connection,
+    stream_id: int,
+    *,
+    watermark_seq: int,
+    watermark_event_time: str,
+) -> None:
+    """Move both watermarks in one statement. Callers pass the post-decision pair."""
     conn.execute(
-        "UPDATE project_streams SET watermark_seq=? WHERE id=?",
-        (watermark_seq, stream_id),
+        "UPDATE project_streams SET watermark_seq=?, watermark_event_time=? WHERE id=?",
+        (watermark_seq, watermark_event_time, stream_id),
     )

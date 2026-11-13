@@ -34,9 +34,46 @@ STREAM_SEEDS = [
     },
 ]
 
+# Columns added after the 0-1 base schema. Applied idempotently so an existing
+# docker volume keeps working without a reset.
+COLUMN_MIGRATIONS = {
+    "project_streams": [
+        ("watermark_event_time", "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "project_batches": [
+        ("mode", "TEXT NOT NULL DEFAULT 'strict'"),
+        ("decision", "TEXT NOT NULL DEFAULT 'commit'"),
+        ("advance_mode", "TEXT NOT NULL DEFAULT 'both'"),
+        ("reason_code", "TEXT NOT NULL DEFAULT 'both_advance'"),
+        ("reason_text", "TEXT NOT NULL DEFAULT ''"),
+        ("wave", "INTEGER NOT NULL DEFAULT 0"),
+        ("skipped_stale", "INTEGER NOT NULL DEFAULT 0"),
+        ("max_event_time", "TEXT NOT NULL DEFAULT ''"),
+        ("wm_seq_before", "INTEGER NOT NULL DEFAULT 0"),
+        ("wm_seq_after", "INTEGER NOT NULL DEFAULT 0"),
+        ("wm_time_before", "TEXT NOT NULL DEFAULT ''"),
+        ("wm_time_after", "TEXT NOT NULL DEFAULT ''"),
+        ("projection_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+        ("prev_fingerprint", "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "applied_events": [
+        ("detail", "TEXT NOT NULL DEFAULT ''"),
+    ],
+}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _ensure_columns(conn) -> None:
+    for table, columns in COLUMN_MIGRATIONS.items():
+        existing = {
+            r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for name, ddl in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
 def init_db() -> None:
@@ -119,6 +156,7 @@ def init_db() -> None:
             );
             """
         )
+        _ensure_columns(conn)
         if conn.execute("SELECT COUNT(*) c FROM project_streams").fetchone()["c"] == 0:
             now = _now()
             for s in STREAM_SEEDS:
@@ -126,8 +164,8 @@ def init_db() -> None:
                     """
                     INSERT INTO project_streams(
                         code, title, domain, entity_key_name, payload_fields_json,
-                        fixture, enabled, watermark_seq, created_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?)
+                        fixture, enabled, watermark_seq, watermark_event_time, created_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         s["code"],
@@ -138,22 +176,24 @@ def init_db() -> None:
                         s["fixture"],
                         s["enabled"],
                         0,
+                        "",
                         now,
                     ),
                 )
-        if conn.execute("SELECT COUNT(*) c FROM settings").fetchone()["c"] == 0:
-            conn.execute(
-                "INSERT INTO settings(key, value) VALUES (?, ?)",
-                ("apply_order", "by_seq"),
-            )
-            conn.execute(
-                "INSERT INTO settings(key, value) VALUES (?, ?)",
-                ("duplicate_policy", "skip"),
-            )
-            conn.execute(
-                "INSERT INTO settings(key, value) VALUES (?, ?)",
-                ("tombstone_mode", "soft_delete"),
-            )
+        defaults = {
+            "apply_order": "by_seq",
+            "duplicate_policy": "skip",
+            "tombstone_mode": "soft_delete",
+            "commit_mode_default": "strict",
+            "catch_up_advance": "seq_only",
+            "dual_watermark": "both_or_nothing",
+        }
+        existing = {
+            r["key"] for r in conn.execute("SELECT key FROM settings").fetchall()
+        }
+        for key, value in defaults.items():
+            if key not in existing:
+                conn.execute("INSERT INTO settings(key, value) VALUES (?, ?)", (key, value))
         conn.commit()
     finally:
         conn.close()

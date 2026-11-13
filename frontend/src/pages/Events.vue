@@ -30,7 +30,10 @@ watch(batchId, async () => {
 <template>
   <div class="page">
     <h1>事件留痕</h1>
-    <p class="muted">本批（或全部）已处理事件：结果为写入 / 删除 / 跳过重复。</p>
+    <p class="muted">
+      本批（或全部）已处理事件：结果为写入 / 删除 / 跳过重复 / 陈旧跳过 /
+      本趟拒绝（整趟未提交）。
+    </p>
     <p v-if="err" class="tag danger">{{ err }}</p>
     <div class="panel" style="display:flex;gap:0.75rem;align-items:flex-end">
       <label>
@@ -43,7 +46,7 @@ watch(batchId, async () => {
       <table>
         <thead>
           <tr>
-            <th>批次</th><th>event_id</th><th>实体键</th><th>op</th><th>seq</th><th>事件时间</th><th>结果</th>
+            <th>批次</th><th>event_id</th><th>实体键</th><th>op</th><th>seq</th><th>事件时间</th><th>结果</th><th>说明</th>
           </tr>
         </thead>
         <tbody>
@@ -54,9 +57,10 @@ watch(batchId, async () => {
             <td class="mono">{{ e.op }}</td>
             <td class="mono">{{ e.seq }}</td>
             <td class="mono">{{ e.event_time }}</td>
-            <td><span class="tag">{{ e.result }}</span></td>
+            <td><span class="tag" :class="e.result === 'rejected_no_commit' ? 'danger' : ''">{{ e.result }}</span></td>
+            <td class="muted">{{ e.detail }}</td>
           </tr>
-          <tr v-if="!rows.length"><td colspan="7" class="muted">暂无留痕。</td></tr>
+          <tr v-if="!rows.length"><td colspan="8" class="muted">暂无留痕。</td></tr>
         </tbody>
       </table>
     </div>
